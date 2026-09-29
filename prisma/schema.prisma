@@ -1,8 +1,171 @@
 generator client {
-  provider = "prisma-client"
-  output   = "../generated/prisma"
+  provider = "prisma-client-js"
 }
 
 datasource db {
   provider = "postgresql"
+}
+
+enum Role {
+  ADMIN     // Dono da conta: gerencia usuários, assinatura, tudo
+  OPERATOR  // Usuário comum: mexe no estoque, sem acesso a config/billing
+}
+
+enum SubscriptionStatus {
+  TRIAL
+  ACTIVE
+  PAST_DUE
+  CANCELED
+}
+
+enum MovementType {
+  IN   // entrada de estoque
+  OUT  // saída de estoque
+}
+
+// ------------------------------
+// ACCOUNT (Tenant / Empresa cliente)
+// ------------------------------
+
+model Account {
+  id        String   @id @default(uuid())
+  name      String   // Nome da empresa/loja
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Assinatura / billing
+  subscriptionStatus SubscriptionStatus @default(TRIAL)
+  planId             String?            // ex: "basic", "pro" — referência ao plano
+  trialEndsAt        DateTime?
+  stripeCustomerId   String?            @unique
+  stripeSubscriptionId String?          @unique
+
+  // Relacionamentos (tudo isolado por accountId)
+  users           User[]
+  products        Product[]
+  categories      Category[]
+  suppliers       Supplier[]
+  stockMovements  StockMovement[]
+
+  @@map("accounts")
+}
+
+// ------------------------------
+// USER
+// ------------------------------
+
+model User {
+  id        String   @id @default(uuid())
+  name      String
+  email     String   @unique
+  password  String   // hash bcrypt
+  role      Role     @default(OPERATOR)
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  accountId String
+  account   Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  stockMovements StockMovement[] // quem registrou cada movimentação
+
+  @@index([accountId])
+  @@map("users")
+}
+
+// ------------------------------
+// CATEGORY
+// ------------------------------
+
+model Category {
+  id        String   @id @default(uuid())
+  name      String
+  createdAt DateTime @default(now())
+
+  accountId String
+  account   Account   @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  products  Product[]
+
+  @@unique([accountId, name]) // não repete nome de categoria dentro da mesma conta
+  @@index([accountId])
+  @@map("categories")
+}
+
+// ------------------------------
+// SUPPLIER (Fornecedor)
+// ------------------------------
+
+model Supplier {
+  id        String   @id @default(uuid())
+  name      String
+  email     String?
+  phone     String?
+  document  String?  // CNPJ/CPF
+  createdAt DateTime @default(now())
+
+  accountId String
+  account   Account   @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  products  Product[]
+
+  @@index([accountId])
+  @@map("suppliers")
+}
+
+// ------------------------------
+// PRODUCT
+// ------------------------------
+
+model Product {
+  id            String   @id @default(uuid())
+  name          String
+  sku           String?  // código interno do produto
+  barcode       String?  // código de barras
+  description   String?
+  costPrice     Decimal  @default(0) @db.Decimal(10, 2)
+  sellingPrice  Decimal  @default(0) @db.Decimal(10, 2)
+  quantity      Int      @default(0) // saldo atual em estoque
+  minStock      Int      @default(0) // limite mínimo para alerta de estoque baixo
+  active        Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  accountId String
+  account   Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  categoryId String?
+  category   Category? @relation(fields: [categoryId], references: [id])
+
+  supplierId String?
+  supplier   Supplier? @relation(fields: [supplierId], references: [id])
+
+  stockMovements StockMovement[]
+
+  @@unique([accountId, sku])
+  @@index([accountId])
+  @@map("products")
+}
+
+// ------------------------------
+// STOCK MOVEMENT (histórico de entradas/saídas)
+// ------------------------------
+
+model StockMovement {
+  id        String       @id @default(uuid())
+  type      MovementType
+  quantity  Int
+  reason    String?      // ex: "Compra", "Venda", "Ajuste", "Perda"
+  createdAt DateTime     @default(now())
+
+  accountId String
+  account   Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  productId String
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  userId String?
+  user   User?   @relation(fields: [userId], references: [id])
+
+  @@index([accountId])
+  @@index([productId])
+  @@map("stock_movements")
 }
